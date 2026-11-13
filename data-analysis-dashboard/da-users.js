@@ -138,6 +138,8 @@ function startUsers() {
   usersActivityState = 'idle';
   usersFilter = 'all';
   usersSearch = '';
+  usersGroup = '';
+  usersShown = USERS_PAGE_SIZE;
 
   var currentPct = 0;
   var fakeTimer = setInterval(function() {
@@ -250,7 +252,7 @@ function renderUsers() {
 
   h += usInsights(users, c);
   h += usGroupTable(users);
-  h += '<div id="usersListWrap">' + usListHtml(users, c) + '</div>';
+  h += '<div id="usersListWrap">' + usListHtml(users) + '</div>';
   // The activity load re-renders the page; keep the caret if the user is typing a search.
   var typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('#usersListWrap');
   el.innerHTML = h;
@@ -297,14 +299,23 @@ function usInsights(users, c) {
   return h;
 }
 
+// Rows of the list rendered per step; "Show more" adds another portion.
+var USERS_PAGE_SIZE = 50;
+var usersShown = USERS_PAGE_SIZE;
+var usersGroup = '';        // selected group name, '' = all groups
+var usersGroupNames = [];   // group names in table order, for index-based clicks
+
+function usGroupOf(u) { return u.group || '(No group)'; }
+
 function usGroupTable(users) {
   var byGroup = {}, order = [];
   for (var i = 0; i < users.length; i++) {
-    var g = users[i].group || '(No group)';
+    var g = usGroupOf(users[i]);
     if (!byGroup[g]) { byGroup[g] = { name: g, total: 0, active: 0, lapsing: 0, dormant: 0, never: 0 }; order.push(g); }
     byGroup[g].total++;
     byGroup[g][users[i].status]++;
   }
+  usersGroupNames = [];
   if (order.length < 2) return '';
   var rows = [];
   for (var j = 0; j < order.length; j++) rows.push(byGroup[order[j]]);
@@ -312,20 +323,31 @@ function usGroupTable(users) {
 
   var h = '<div class="entity-card" style="margin-top:18px">';
   h += '<div class="entity-header"><div class="entity-info"><h3>Login activity by group</h3>';
-  h += '<span class="field-count">— primary user group</span></div></div>';
+  h += '<span class="field-count">— primary user group · click a group to filter the list</span></div></div>';
   h += '<table class="data-table"><thead><tr><th>Group</th><th class="col-right">Users</th>';
   h += '<th class="col-right">Active</th><th class="col-right">Lapsing</th><th class="col-right">Dormant</th><th class="col-right">Never</th>';
   h += '<th style="width:200px">Active share</th></tr></thead><tbody>';
   for (var k = 0; k < rows.length; k++) {
     var r = rows[k];
+    usersGroupNames.push(r.name);
+    var sel = usersGroup === r.name;
     var pct = r.total > 0 ? Math.round(r.active / r.total * 100) : 0;
-    h += '<tr><td><strong>' + usEsc(r.name) + '</strong></td><td class="col-right">' + fmtNum(r.total) + '</td>';
+    h += '<tr style="cursor:pointer' + (sel ? ';background:var(--chip-fill)' : '') + '" title="Show the users of this group" onclick="usSetGroupIdx(' + k + ')">';
+    h += '<td><strong>' + usEsc(r.name) + '</strong></td><td class="col-right">' + fmtNum(r.total) + '</td>';
     h += '<td class="col-right">' + fmtNum(r.active) + '</td><td class="col-right">' + fmtNum(r.lapsing) + '</td>';
     h += '<td class="col-right">' + fmtNum(r.dormant) + '</td><td class="col-right">' + fmtNum(r.never) + '</td>';
     h += '<td>' + fillBar(pct, 8, 'var(--c1)') + '<div style="margin-top:4px;font-size:var(--fs-chip);color:var(--muted)">' + pct + P + '</div></td></tr>';
   }
   h += '</tbody></table></div>';
   return h;
+}
+
+// Users of the selected group (or all); the status buttons count within this set.
+function usInGroup(users) {
+  if (!usersGroup) return users;
+  var out = [];
+  for (var i = 0; i < users.length; i++) if (usGroupOf(users[i]) === usersGroup) out.push(users[i]);
+  return out;
 }
 
 function usFilteredSorted(users) {
@@ -356,46 +378,51 @@ function usFilteredSorted(users) {
   return out;
 }
 
-// Short legend under the filters: what each status and the columns mean.
+// One line under the filters, only for the selected tab.
 function usLegendHtml() {
-  var row = function(key) {
-    var st = US_STATUS[key];
-    return '<div style="display:flex;gap:10px;align-items:baseline"><span class="mm-badge" style="background:' + st.bg + ';color:' + st.fg + ';flex:0 0 auto">' + st.label + '</span><span>' + usEsc(usStatusDesc(key)) + '</span></div>';
-  };
-  var actTxt = usersActivityState === 'done'
-    ? 'Activities: activities and documents owned by the user (' + usEsc(usersActivityLabel) + ').'
-    : 'Activities: activities and documents owned by the user in the period of the Activities page.';
-  var h = '<div style="padding:0 16px 14px;font-size:var(--fs-chip);color:var(--muted);display:grid;gap:6px">';
-  h += row('active') + row('lapsing') + row('dormant') + row('never');
-  h += '<div style="margin-top:4px">Last login counts every sign-in to SuperOffice, in the browser and through apps or integrations that use the account. ' + actTxt + '</div>';
-  h += '</div>';
-  return h;
+  var h = '<div style="padding:0 16px 14px;font-size:var(--fs-chip);color:var(--muted);display:flex;gap:10px;align-items:baseline">';
+  if (usersFilter === 'all') {
+    h += '<span>Every user who can log in, longest without a login first. Hover a status for its meaning.</span>';
+  } else {
+    var st = US_STATUS[usersFilter];
+    h += '<span class="mm-badge" style="background:' + st.bg + ';color:' + st.fg + ';flex:0 0 auto">' + st.label + '</span>';
+    h += '<span>' + usEsc(usStatusDesc(usersFilter)) + '</span>';
+  }
+  return h + '</div>';
 }
 
-function usListHtml(users, c) {
+function usListHtml(allUsers) {
+  var users = usInGroup(allUsers);
+  var c = usCounts(users);
   var list = usFilteredSorted(users);
   var f = function(key, label, n) {
     return '<button class="btn-s ' + (usersFilter === key ? 'primary' : 'ghost') + '" title="' + usEsc(usStatusDesc(key)) + '" onclick="usSetFilter(\'' + key + '\')">' + label + ' (' + fmtNum(n) + ')</button>';
   };
   var arrow = function(col) { return usersSort.col === col ? (usersSort.asc ? ' ▲' : ' ▼') : ''; };
-  var th = function(col, label, cls) {
-    return '<th' + (cls ? ' class="' + cls + '"' : '') + ' style="cursor:pointer;white-space:nowrap" onclick="usSetSort(\'' + col + '\')">' + label + arrow(col) + '</th>';
+  var th = function(col, label, cls, tip) {
+    return '<th' + (cls ? ' class="' + cls + '"' : '') + (tip ? ' title="' + usEsc(tip) + '"' : '') + ' style="cursor:pointer;white-space:nowrap" onclick="usSetSort(\'' + col + '\')">' + label + arrow(col) + '</th>';
   };
-  var actHead = usersActivityState === 'done' ? 'Activities' : (usersActivityState === 'loading' ? 'Activities…' : 'Activities');
+  var actHead = usersActivityState === 'loading' ? 'Activities…' : 'Activities';
+  var actTip = 'Activities and documents owned by the user, ' + (usersActivityState === 'done' ? usersActivityLabel : 'in the period of the Activities page') + '.';
+  var loginTip = 'Counts every sign-in to SuperOffice: in the browser and through apps or integrations that use the account.';
 
   var h = '<div class="entity-card" style="margin-top:18px">';
-  h += '<div class="entity-header"><div class="entity-info"><h3>All users</h3>';
-  h += '<span class="field-count">— ' + fmtNum(list.length) + ' shown</span></div>';
+  h += '<div class="entity-header"><div class="entity-info"><h3>' + (usersGroup ? usEsc(usersGroup) : 'All users') + '</h3>';
+  h += '<span class="field-count">— ' + fmtNum(list.length) + ' user' + (list.length !== 1 ? 's' : '') + '</span>';
+  if (usersGroup) h += ' <button class="btn-s ghost" style="padding:5px 10px;margin-left:8px" onclick="usSetGroupIdx(-1)">Group: ' + usEsc(usersGroup) + ' ✕</button>';
+  h += '</div>';
   h += '<input type="text" placeholder="Search name, login or group" value="' + usEsc(usersSearch) + '" oninput="usSetSearch(this.value)" style="padding:8px 12px;border:1px solid var(--line);border-radius:9px;font-family:inherit;min-width:240px"></div>';
-  h += '<div style="display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 14px">';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:8px;padding:14px 16px 10px">';
   h += f('all', 'All', c.total) + f('active', 'Active', c.active) + f('lapsing', 'Lapsing', c.lapsing) + f('dormant', 'Dormant', c.dormant) + f('never', 'Never', c.never);
   h += '</div>';
   h += usLegendHtml();
   h += '<table class="data-table"><thead><tr>';
-  h += th('name', 'User') + th('login', 'Login') + th('group', 'Group') + '<th>Last login</th>' + th('days', 'Days ago', 'col-right');
-  h += '<th>Status</th>' + th('activity', actHead, 'col-right');
+  h += th('name', 'User') + th('login', 'Login') + th('group', 'Group');
+  h += '<th title="' + usEsc(loginTip) + '" style="white-space:nowrap">Last login ⓘ</th>' + th('days', 'Days ago', 'col-right');
+  h += '<th>Status</th>' + th('activity', actHead + ' ⓘ', 'col-right', actTip);
   h += '</tr></thead><tbody>';
-  for (var i = 0; i < list.length; i++) {
+  var upto = Math.min(list.length, usersShown);
+  for (var i = 0; i < upto; i++) {
     var u = list[i];
     var st = US_STATUS[u.status];
     var a = usActivityOf(u);
@@ -410,24 +437,44 @@ function usListHtml(users, c) {
     h += '<td class="col-right">' + actCell + '</td></tr>';
   }
   if (list.length === 0) h += '<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:18px">No users match this filter.</td></tr>';
-  h += '</tbody></table></div>';
+  h += '</tbody></table>';
+  if (list.length > upto) {
+    var next = Math.min(USERS_PAGE_SIZE, list.length - upto);
+    h += '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-top:1px solid var(--so-border);font-size:var(--fs-chip);color:var(--muted)">';
+    h += '<span>Showing ' + fmtNum(upto) + ' of ' + fmtNum(list.length) + '. Export gives the complete list.</span>';
+    h += '<button class="btn-s ghost" onclick="usShowMore()">Show ' + fmtNum(next) + ' more</button></div>';
+  }
+  h += '</div>';
   return h;
 }
 
 function usRefreshList() {
   var wrap = document.getElementById('usersListWrap');
   if (!wrap || !usersData) return;
-  wrap.innerHTML = usListHtml(usersData.users, usCounts(usersData.users));
+  wrap.innerHTML = usListHtml(usersData.users);
 }
-function usSetFilter(key) { usersFilter = key; usRefreshList(); }
+function usSetFilter(key) { usersFilter = key; usersShown = USERS_PAGE_SIZE; usRefreshList(); }
+function usShowMore() { usersShown += USERS_PAGE_SIZE; usRefreshList(); }
 function usSetSort(col) {
   if (usersSort.col === col) usersSort.asc = !usersSort.asc;
   else { usersSort.col = col; usersSort.asc = (col !== 'days' && col !== 'activity'); }
+  usersShown = USERS_PAGE_SIZE;
   usRefreshList();
+}
+// Selecting a group re-renders the page so the group row is highlighted,
+// then brings the list into view. -1 clears the group.
+function usSetGroupIdx(i) {
+  var g = (i >= 0 && i < usersGroupNames.length) ? usersGroupNames[i] : '';
+  usersGroup = (g === usersGroup) ? '' : g;
+  usersShown = USERS_PAGE_SIZE;
+  renderUsers();
+  var wrap = document.getElementById('usersListWrap');
+  if (wrap && wrap.scrollIntoView) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 // Re-rendering the list replaces the input, so focus and caret are restored.
 function usSetSearch(v) {
   usersSearch = v;
+  usersShown = USERS_PAGE_SIZE;
   usRefreshList();
   var inp = document.querySelector('#usersListWrap input[type=text]');
   if (inp) { inp.focus(); inp.setSelectionRange(v.length, v.length); }
