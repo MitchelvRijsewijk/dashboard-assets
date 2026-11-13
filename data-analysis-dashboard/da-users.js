@@ -99,21 +99,27 @@ function usCounts(users) {
 
 // =====================================================
 // Load flow
+// The redesign hides the per-page Analyze button and pages are filled by
+// Analyze All, which does not know this page. So the page loads itself the
+// first time it is opened (see the sw wrapper at the end of this file).
+// It never calls captureEntityFilter: that moves currentAnalysisEntity, and an
+// Analyze All that is still running would then pick up the wrong period.
 // =====================================================
+var usersLoading = false;
+
 function startUsers() {
+  if (usersLoading) return;
+  usersLoading = true;
   var key = 'users';
-  captureEntityFilter(key);
   var progressScreen = document.getElementById(key + 'ProgressScreen');
   var progressBar = document.getElementById(key + 'ProgressBar');
   var progressPercent = document.getElementById(key + 'ProgressPercent');
   var progressStatus = document.getElementById(key + 'ProgressStatus');
   var resultsContainer = document.getElementById(key + 'Results');
-  var headerBtn = document.getElementById(key + 'AnalyzeBtn');
   var expBtn = document.getElementById(key + 'ExportBtn');
 
   if (resultsContainer) resultsContainer.style.display = 'none';
   if (expBtn) expBtn.style.display = 'none';
-  if (headerBtn) headerBtn.disabled = true;
   if (progressScreen) progressScreen.style.display = '';
   if (progressBar) { progressBar.style.width = '0'; progressBar.classList.add('loading'); }
   if (progressPercent) progressPercent.textContent = '0' + P;
@@ -133,11 +139,9 @@ function startUsers() {
     }
   }, 150);
 
-  // Capture the period now, so a later page switch cannot change it mid-flight.
-  var dfParam = getDateFilterParam();
-
   ajax(usersUrl, function(d) {
     clearInterval(fakeTimer);
+    usersLoading = false;
     usersData = usPrepare(d);
     if (progressBar) { progressBar.style.width = '100' + P; progressBar.classList.remove('loading'); }
     if (progressPercent) progressPercent.textContent = '100' + P;
@@ -147,15 +151,49 @@ function startUsers() {
       if (progressScreen) progressScreen.style.display = 'none';
       if (resultsContainer) resultsContainer.style.display = '';
       if (expBtn && d) expBtn.style.display = '';
-      if (headerBtn) { headerBtn.disabled = false; headerBtn.onclick = function() { startUsers(); }; }
     }, 400);
-    if (d && usersData.users.length > 0) usLoadActivity(dfParam);
+    if (d && usersData.users.length > 0) usLoadActivity();
   });
 }
 
-// Per-user activity comes from MomentumFetch, which counts per user and is the
-// slow part on large tenants. It loads after the login view is already visible.
-function usLoadActivity(dfParam) {
+// Period of the Activities page: the one Momentum data on screen belongs to.
+function usActivityPeriodParam() {
+  var amp = String.fromCharCode(38);
+  var df = (typeof activeFilterValue !== 'undefined' && activeFilterValue['activities']) ? activeFilterValue['activities'] : '';
+  var dt = (typeof activeWindowTo !== 'undefined' && activeWindowTo) ? activeWindowTo : '';
+  var sc = (typeof activeScope !== 'undefined' && activeScope) ? activeScope : 'active';
+  var p = '';
+  if (df) p += amp + 'dateFrom=' + df + amp + 'dateFilter=' + df;
+  if (dt) p += amp + 'dateTo=' + dt;
+  return p + amp + 'scope=' + sc;
+}
+
+function usActivityPeriodLabel() {
+  var lbl = (typeof activeFilterLabel !== 'undefined' && activeFilterLabel['activities']) ? activeFilterLabel['activities'] : '';
+  var df = (typeof activeFilterValue !== 'undefined' && activeFilterValue['activities']) ? activeFilterValue['activities'] : '';
+  if (lbl) return lbl;
+  return df ? 'since ' + df : 'all data';
+}
+
+function usApplyMomentum(m) {
+  usersActivity = {};
+  for (var i = 0; i < m.users.length; i++) {
+    var mu = m.users[i];
+    usersActivity[mu.id] = { activities: mu.activities || 0, documents: mu.documents || 0, total: mu.total || 0 };
+  }
+  usersActivityLabel = usActivityPeriodLabel();
+  usersActivityState = 'done';
+}
+
+// Per-user activity comes from MomentumFetch. When Analyze All or the Activities
+// page already loaded it, that data is reused; otherwise it loads in the background
+// (the slow part on large tenants) after the login view is visible.
+function usLoadActivity() {
+  if (typeof momentumData !== 'undefined' && momentumData && momentumData.users) {
+    usApplyMomentum(momentumData);
+    renderUsers();
+    return;
+  }
   var amp = String.fromCharCode(38);
   var etParam = '';
   if (typeof daSettings !== 'undefined' && daSettings.getMomentumSettings) {
@@ -163,16 +201,10 @@ function usLoadActivity(dfParam) {
     if (mmS.excludedTypes && mmS.excludedTypes.length > 0) etParam = amp + 'excludeTypes=' + encodeURIComponent(mmS.excludedTypes.join(','));
   }
   usersActivityState = 'loading';
-  usersActivityLabel = (activeFilterLabel && activeFilterLabel['users']) ? activeFilterLabel['users'] : 'All data';
   renderUsers();
-  ajax(momentumUrl + amp + 'dummy=1' + dfParam + etParam, function(m) {
+  ajax(momentumUrl + amp + 'dummy=1' + usActivityPeriodParam() + etParam, function(m) {
     if (!m || !m.users) { usersActivityState = 'failed'; renderUsers(); return; }
-    usersActivity = {};
-    for (var i = 0; i < m.users.length; i++) {
-      var mu = m.users[i];
-      usersActivity[mu.id] = { activities: mu.activities || 0, documents: mu.documents || 0, total: mu.total || 0 };
-    }
-    usersActivityState = 'done';
+    usApplyMomentum(m);
     renderUsers();
   });
 }
@@ -194,9 +226,11 @@ function renderUsers() {
     return;
   }
   var c = usCounts(users);
-  var h = dateFilterNotice();
-
-  h += hcSecLabel('Login activity · users who can log in');
+  // Own header line: the page has no date filter of its own, and the shared
+  // dateFilterNotice() reads currentAnalysisEntity, which belongs to Analyze All.
+  var h = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px">';
+  h += hcSecLabel('Login activity · users who can log in · today');
+  h += '<button class="btn-s ghost" onclick="startUsers()">Refresh</button></div>';
   h += '<div class="kpis" style="grid-template-columns:repeat(5,minmax(0,1fr))">';
   h += ovCard('Users with login', c.total, '', '');
   h += ovCard('Logged in ≤ ' + USERS_ACTIVE_DAYS + ' days', c.active, c.total, '');
@@ -412,4 +446,23 @@ function exportUsers() {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Users');
 
   XLSX.writeFile(wb, 'HealthCheck_Users_' + new Date().toISOString().split('T')[0] + '.xlsx');
+}
+
+// =====================================================
+// Open hook
+// Wraps the global page switcher: opening Users loads it once, and picks up
+// Momentum data that Analyze All loaded after the page was first filled.
+// =====================================================
+if (typeof sw === 'function') {
+  var usOrigSw = sw;
+  sw = function(id, el) {
+    usOrigSw(id, el);
+    if (id !== 'users') return;
+    if (!usersData && !usersLoading) { startUsers(); return; }
+    if (usersData && usersActivityState !== 'done' && usersActivityState !== 'loading' &&
+        typeof momentumData !== 'undefined' && momentumData && momentumData.users) {
+      usApplyMomentum(momentumData);
+      renderUsers();
+    }
+  };
 }
