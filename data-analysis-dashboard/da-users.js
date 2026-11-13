@@ -33,6 +33,15 @@ var US_STATUS = {
   never:   { label: 'Never logged in', bg: 'var(--chip-fill)',      fg: 'var(--chip-ink)' }
 };
 
+// One plain-language definition per status, used in the legend and as tooltips.
+function usStatusDesc(key) {
+  if (key === 'active') return 'Logged in within the last ' + USERS_ACTIVE_DAYS + ' days.';
+  if (key === 'lapsing') return 'Last login ' + (USERS_ACTIVE_DAYS + 1) + ' to ' + USERS_DORMANT_DAYS + ' days ago: still around, but using SuperOffice less.';
+  if (key === 'dormant') return 'Last login more than ' + USERS_DORMANT_DAYS + ' days ago: probably no longer uses SuperOffice.';
+  if (key === 'never') return 'No login recorded for this account.';
+  return 'Every user who can log in.';
+}
+
 function usEsc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -233,9 +242,9 @@ function renderUsers() {
   h += '<button class="btn-s ghost" onclick="startUsers()">Refresh</button></div>';
   h += '<div class="kpis" style="grid-template-columns:repeat(5,minmax(0,1fr))">';
   h += ovCard('Users with login', c.total, '', '');
-  h += ovCard('Logged in ≤ ' + USERS_ACTIVE_DAYS + ' days', c.active, c.total, '');
-  h += ovCard(USERS_ACTIVE_DAYS + 1 + '–' + USERS_DORMANT_DAYS + ' days ago', c.lapsing, c.total, '');
-  h += ovCard('More than ' + USERS_DORMANT_DAYS + ' days ago', c.dormant, c.total, '');
+  h += ovCard('Active · ≤ ' + USERS_ACTIVE_DAYS + ' days', c.active, c.total, '');
+  h += ovCard('Lapsing · ' + (USERS_ACTIVE_DAYS + 1) + '–' + USERS_DORMANT_DAYS + ' days', c.lapsing, c.total, '');
+  h += ovCard('Dormant · > ' + USERS_DORMANT_DAYS + ' days', c.dormant, c.total, '');
   h += ovCard('Never logged in', c.never, c.total, '');
   h += '</div>';
 
@@ -301,7 +310,7 @@ function usGroupTable(users) {
   for (var j = 0; j < order.length; j++) rows.push(byGroup[order[j]]);
   rows.sort(function(a, b) { return b.total - a.total; });
 
-  var h = '<div class="entity-card">';
+  var h = '<div class="entity-card" style="margin-top:18px">';
   h += '<div class="entity-header"><div class="entity-info"><h3>Login activity by group</h3>';
   h += '<span class="field-count">— primary user group</span></div></div>';
   h += '<table class="data-table"><thead><tr><th>Group</th><th class="col-right">Users</th>';
@@ -347,10 +356,26 @@ function usFilteredSorted(users) {
   return out;
 }
 
+// Short legend under the filters: what each status and the columns mean.
+function usLegendHtml() {
+  var row = function(key) {
+    var st = US_STATUS[key];
+    return '<div style="display:flex;gap:10px;align-items:baseline"><span class="mm-badge" style="background:' + st.bg + ';color:' + st.fg + ';flex:0 0 auto">' + st.label + '</span><span>' + usEsc(usStatusDesc(key)) + '</span></div>';
+  };
+  var actTxt = usersActivityState === 'done'
+    ? 'Activities: activities and documents owned by the user (' + usEsc(usersActivityLabel) + ').'
+    : 'Activities: activities and documents owned by the user in the period of the Activities page.';
+  var h = '<div style="padding:0 16px 14px;font-size:var(--fs-chip);color:var(--muted);display:grid;gap:6px">';
+  h += row('active') + row('lapsing') + row('dormant') + row('never');
+  h += '<div style="margin-top:4px">Last login counts every sign-in to SuperOffice, in the browser and through apps or integrations that use the account. ' + actTxt + '</div>';
+  h += '</div>';
+  return h;
+}
+
 function usListHtml(users, c) {
   var list = usFilteredSorted(users);
   var f = function(key, label, n) {
-    return '<button class="btn-s ' + (usersFilter === key ? 'primary' : 'ghost') + '" onclick="usSetFilter(\'' + key + '\')">' + label + ' (' + fmtNum(n) + ')</button>';
+    return '<button class="btn-s ' + (usersFilter === key ? 'primary' : 'ghost') + '" title="' + usEsc(usStatusDesc(key)) + '" onclick="usSetFilter(\'' + key + '\')">' + label + ' (' + fmtNum(n) + ')</button>';
   };
   var arrow = function(col) { return usersSort.col === col ? (usersSort.asc ? ' ▲' : ' ▼') : ''; };
   var th = function(col, label, cls) {
@@ -358,13 +383,14 @@ function usListHtml(users, c) {
   };
   var actHead = usersActivityState === 'done' ? 'Activities' : (usersActivityState === 'loading' ? 'Activities…' : 'Activities');
 
-  var h = '<div class="entity-card">';
+  var h = '<div class="entity-card" style="margin-top:18px">';
   h += '<div class="entity-header"><div class="entity-info"><h3>All users</h3>';
   h += '<span class="field-count">— ' + fmtNum(list.length) + ' shown</span></div>';
   h += '<input type="text" placeholder="Search name, login or group" value="' + usEsc(usersSearch) + '" oninput="usSetSearch(this.value)" style="padding:8px 12px;border:1px solid var(--line);border-radius:9px;font-family:inherit;min-width:240px"></div>';
   h += '<div style="display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 14px">';
   h += f('all', 'All', c.total) + f('active', 'Active', c.active) + f('lapsing', 'Lapsing', c.lapsing) + f('dormant', 'Dormant', c.dormant) + f('never', 'Never', c.never);
   h += '</div>';
+  h += usLegendHtml();
   h += '<table class="data-table"><thead><tr>';
   h += th('name', 'User') + th('login', 'Login') + th('group', 'Group') + '<th>Last login</th>' + th('days', 'Days ago', 'col-right');
   h += '<th>Status</th>' + th('activity', actHead, 'col-right');
@@ -380,7 +406,7 @@ function usListHtml(users, c) {
     h += '<td style="color:var(--muted)">' + usEsc(u.group || '—') + '</td>';
     h += '<td>' + (u.lastLoginDate ? usIsoDay(u.lastLoginDate) : '—') + '</td>';
     h += '<td class="col-right">' + (u.days === null ? '—' : fmtNum(u.days)) + '</td>';
-    h += '<td><span class="mm-badge" style="background:' + st.bg + ';color:' + st.fg + '">' + st.label + '</span></td>';
+    h += '<td><span class="mm-badge" title="' + usEsc(usStatusDesc(u.status)) + '" style="background:' + st.bg + ';color:' + st.fg + '">' + st.label + '</span></td>';
     h += '<td class="col-right">' + actCell + '</td></tr>';
   }
   if (list.length === 0) h += '<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:18px">No users match this filter.</td></tr>';
